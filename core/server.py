@@ -59,6 +59,10 @@ TRUSTED_ORIGIN_SCHEMES = frozenset({"vscode-webview"})
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
+# Default authority ports per scheme, used to compare an Origin against the Host
+# header that received the request (a same-origin check).
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
 
 def _normalize_parsed(parsed: ParseResult) -> Optional[str]:
     if not parsed.scheme:
@@ -106,6 +110,28 @@ def _is_origin_allowed(origin: str) -> bool:
     return normalized in _get_allowed_http_origins()
 
 
+def _is_same_origin_as_host(origin: str, host_header: Optional[str]) -> bool:
+    """Return True when the Origin's authority matches the request's Host header.
+
+    A same-origin request is the server's own page calling back to the host that
+    served it, so it is never the cross-site/DNS-rebinding threat this middleware
+    guards against. Matching the Host header lets a single deployment answer on any
+    number of hostnames without enumerating each one in the allowlist.
+    """
+    if not host_header:
+        return False
+    parsed = urlparse(origin)
+    if not parsed.hostname:
+        return False
+    host = urlparse(f"//{host_header}")
+    try:
+        origin_port = parsed.port or _DEFAULT_PORTS.get(parsed.scheme)
+        host_port = host.port or _DEFAULT_PORTS.get(parsed.scheme)
+    except ValueError:
+        return False
+    return parsed.hostname == host.hostname and origin_port == host_port
+
+
 class OriginValidationMiddleware:
     """Reject browser-originated HTTP requests from untrusted origins."""
 
@@ -118,7 +144,11 @@ class OriginValidationMiddleware:
             raw_origin = headers.get(b"origin")
             if raw_origin:
                 origin = raw_origin.decode("latin-1")
-                if not _is_origin_allowed(origin):
+                raw_host = headers.get(b"host")
+                host_header = raw_host.decode("latin-1") if raw_host else None
+                if not _is_origin_allowed(origin) and not _is_same_origin_as_host(
+                    origin, host_header
+                ):
                     logger.warning("Rejected HTTP request from Origin: %s", origin)
                     response = JSONResponse(
                         {"error": "Origin not allowed"}, status_code=403

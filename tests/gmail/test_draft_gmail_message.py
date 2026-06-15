@@ -565,7 +565,7 @@ async def test_draft_gmail_message_autofills_reply_headers_from_thread():
         "References: <msg1@example.com> <msg2@example.com> <msg3@example.com>"
         in raw_text
     )
-    assert create_kwargs["body"]["message"]["threadId"] == "thread123"
+    assert "threadId" not in create_kwargs["body"]["message"]
 
 
 @pytest.mark.asyncio

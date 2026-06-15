@@ -150,6 +150,52 @@ def test_origin_validation_trusts_any_vscode_webview_origin(monkeypatch):
     )
 
 
+def test_origin_validation_allows_same_origin_request(monkeypatch):
+    from core.server import OriginValidationMiddleware
+
+    # The OAuth proxy consent form posts to itself (action=""), so the request is
+    # always same-origin with the host that served the page. A request whose Origin
+    # matches its own Host must be accepted even if that host was never added to the
+    # allowlist (e.g. WORKSPACE_EXTERNAL_URL unset or misconfigured) — a same-origin
+    # request is the server's own page, never the cross-site threat this guard stops.
+    monkeypatch.setattr(
+        "auth.oauth_config.get_oauth_config",
+        lambda: SimpleNamespace(
+            get_allowed_origins=lambda: ["http://localhost:8000"],
+            external_url=None,
+        ),
+    )
+
+    async def endpoint(request):
+        return Response("ok")
+
+    app = Starlette(
+        routes=[Route("/consent", endpoint, methods=["POST"])],
+        middleware=[Middleware(OriginValidationMiddleware)],
+    )
+    client = TestClient(app)
+
+    # Same-origin consent POST to an unconfigured external host is allowed.
+    same_origin = client.post(
+        "/consent",
+        headers={
+            "Origin": "https://app.example.com",
+            "Host": "app.example.com",
+        },
+    )
+    assert same_origin.status_code == 200
+
+    # A cross-origin request to that same host is still rejected.
+    cross_origin = client.post(
+        "/consent",
+        headers={
+            "Origin": "https://evil.test",
+            "Host": "app.example.com",
+        },
+    )
+    assert cross_origin.status_code == 403
+
+
 def test_configured_server_applies_no_cache_to_served_oauth_discovery_routes(
     monkeypatch,
 ):

@@ -2380,7 +2380,7 @@ async def draft_gmail_message(
         draft_body = _append_signature_to_body(draft_body, body_format, signature_html)
 
     resolved_attachments = await _resolve_url_attachments(attachments)
-    raw_message, thread_id_final, attached_count, attachment_errors = (
+    raw_message, _thread_id_final, attached_count, attachment_errors = (
         _prepare_gmail_message(
             subject=subject,
             body=draft_body,
@@ -2407,12 +2407,9 @@ async def draft_gmail_message(
             f"{details}"
         )
 
-    # Create a draft instead of sending
+    # Create a draft instead of sending. Keep reply threading in the raw
+    # headers; setting message.threadId here can create Gmail UI-hidden drafts.
     draft_body = {"message": {"raw": raw_message}}
-
-    # Associate with thread if provided
-    if thread_id_final:
-        draft_body["message"]["threadId"] = thread_id_final
 
     # Create the draft
     created_draft = await asyncio.to_thread(

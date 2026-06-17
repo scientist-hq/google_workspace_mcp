@@ -350,6 +350,21 @@ def main():
             "Mutually exclusive with --tools, --tool-tier, --permissions, and --read-only."
         ),
     )
+    parser.add_argument(
+        "--exclude-tools",
+        nargs="+",
+        metavar="TOOL_NAME",
+        help=(
+            "Remove the named tools (per-tool-name blocklist) from whatever set "
+            "the other selectors produced. COMPOSES with --permissions, --tools, "
+            "--tool-tier, and the default (it is NOT mutually exclusive with them). "
+            "Unlike --only-tools, this does NOT drop any OAuth scopes: the token "
+            "keeps the scopes of the remaining tools, so use it to drop a tool "
+            "whose scope is shared with tools you keep. "
+            "Example: --permissions drive:full --exclude-tools manage_drive_access "
+            "set_drive_file_permissions."
+        ),
+    )
     args = parser.parse_args()
 
     # Env var fallbacks for plugin users who configure via userConfig.
@@ -727,6 +742,26 @@ def main():
             f"🎯 only-tools: {len(args.only_tools)} tools, "
             f"{len(minimal_scopes)} minimal scopes"
         )
+
+    # Per-tool-name blocklist (--exclude-tools). Runs for every selection mode:
+    # it composes with whatever was selected above by trimming tools at the tool
+    # layer WITHOUT touching the requested OAuth scopes.
+    if args.exclude_tools is not None:
+        from core.tool_tier_loader import ToolTierLoader
+        from core.tool_registry import set_excluded_tools
+
+        excluded = list(dict.fromkeys(args.exclude_tools))  # de-dup, keep order
+        known_tools = ToolTierLoader().get_all_tool_names()
+        unknown = [t for t in excluded if t not in known_tools]
+        if unknown:
+            print(
+                f"Error: unknown tool name(s) for --exclude-tools: {', '.join(unknown)}. "
+                f"Each must be a registered tool name (see core/tool_tiers.yaml).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        set_excluded_tools(set(excluded))
+        safe_print(f"🚫 exclude-tools: {len(excluded)} tools removed")
 
     if perms:
         perm_summary = " | ".join(

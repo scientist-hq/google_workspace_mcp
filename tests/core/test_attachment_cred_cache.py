@@ -5,7 +5,7 @@ route depends on) and the end-to-end stash/load against the in-process fallback
 store.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 from google.oauth2.credentials import Credentials

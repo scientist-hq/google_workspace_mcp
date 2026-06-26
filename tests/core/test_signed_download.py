@@ -4,7 +4,6 @@ Focus on the Drive streaming path: bytes must reassemble exactly, and memory mus
 stay bounded to one chunk (the whole file never sits in RAM).
 """
 
-import io
 
 import pytest
 

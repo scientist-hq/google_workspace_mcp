@@ -452,6 +452,81 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".pdf"):
                 output_filename = f"{Path(output_filename).stem}.pdf"
 
+    # Design A: signed-URL streaming. Drive file ids are stable, so we resolve the
+    # filename/MIME above and sign them straight into the token; the /attachments/
+    # signed route streams the bytes (get_media / export_media) on demand. No base64
+    # through the model, nothing on disk — the path the stateless hosted gateway
+    # needs. We early-return before downloading anything in this process.
+    from core.attachment_signing import (
+        signed_attachment_urls_enabled,
+        mint_download_token,
+        get_signed_attachment_url,
+        clamp_ttl_to_expiry,
+    )
+
+    if signed_attachment_urls_enabled():
+        ref = {"fid": file_id}
+        if export_mime_type:
+            ref["emt"] = export_mime_type  # native Google file → export, not get_media
+
+        # Recover the owner's credentials up front: stash a snapshot so the route can
+        # recover them by email on any replica, and CLAMP the URL/cache TTL to the
+        # token's remaining life. In OAuth 2.1 proxy mode the recovered token has no
+        # refresh_token, so a URL must not outlive the snapshot it depends on.
+        from auth.oauth21_session_store import get_oauth21_session_store
+
+        creds = None
+        try:
+            creds = get_oauth21_session_store().get_credentials(user_google_email)
+        except Exception as cred_exc:
+            logger.debug(
+                f"[get_drive_file_download_url] Could not recover credentials: {cred_exc}"
+            )
+
+        # Only hand out a signed URL the route can actually serve: the owner's
+        # credentials must be recoverable, and the URL must fit inside the
+        # credential's remaining life (eff_ttl > 0). Otherwise fall through to the
+        # normal download path rather than returning a URL guaranteed to 401.
+        eff_ttl = clamp_ttl_to_expiry(creds.expiry) if creds else 0
+        if creds and eff_ttl > 0:
+            token = mint_download_token(
+                source="drive",
+                user_email=user_google_email,
+                ref=ref,
+                filename=output_filename,
+                mime_type=output_mime_type,
+                ttl_seconds=eff_ttl,
+            )
+            download_url = get_signed_attachment_url(token)
+
+            try:
+                from core.attachment_cred_cache import stash_credentials
+
+                await stash_credentials(user_google_email, creds, ttl_seconds=eff_ttl)
+            except Exception as cache_exc:
+                logger.debug(
+                    f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"
+                )
+
+            logger.info(
+                "[get_drive_file_download_url] Returning signed streaming URL (no download)"
+            )
+            return "\n".join(
+                [
+                    "File ready — streamed on demand (no base64, nothing stored).",
+                    f"File: {file_name}",
+                    f"File ID: {file_id}",
+                    f"MIME Type: {output_mime_type}",
+                    f"\n📎 Download URL: {download_url}",
+                    "\nThe server streams the bytes directly from Drive when this URL is "
+                    "fetched; the link is signed to you and expires in ~15 minutes.",
+                ]
+            )
+        logger.info(
+            "[get_drive_file_download_url] Signed URL unavailable (no recoverable "
+            "credentials or token too near expiry); falling back to download."
+        )
+
     # Download the file
     request_obj = (
         service.files().export_media(fileId=file_id, mimeType=export_mime_type)

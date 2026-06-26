@@ -518,7 +518,7 @@ Granular permissions mode provides service-by-service scope control:
 - `--permissions` cannot be combined with `--tools`; enabled services are determined by the `--permissions` entries (optionally filtered by `--tool-tier`)
 - With `--tool-tier`, only tier-matched tools are enabled and only services that have tools in the selected tier are imported
 
-**🎯 Exact tool selection** — `--only-tools` / `--exclude-tools`
+**🎯 Exact Tool Selection**
 ```bash
 # Allowlist exact tools AND request only the scopes those tools need (minimal grant)
 uv run main.py --only-tools send_gmail_message manage_drive_access
@@ -529,6 +529,8 @@ uv run main.py --permissions drive:full --exclude-tools manage_drive_access set_
 Two finer-grained selectors that go beyond the cumulative tiers/levels:
 - **`--only-tools`** — an exact (and possibly cross-service) tool allowlist that *also* derives the **minimal** OAuth scopes those tools need. Mutually exclusive with `--tools`, `--tool-tier`, `--permissions`, and `--read-only`.
 - **`--exclude-tools`** — a tool blocklist that **composes** with any other selector and **leaves scopes untouched** — for dropping a tool whose scope is shared with tools you keep (e.g. the Drive sharing tools under `drive:full`).
+
+Both are **CLI-only** — there's no `WORKSPACE_MCP_*` environment-variable form for them.
 
 See **[docs/granular-tool-selection.md](docs/granular-tool-selection.md)** for the full walkthrough — the tool-list-vs-OAuth-scope distinction, when to deny by scope vs by tool, and a disjoint "base + delta" two-endpoint example.
 

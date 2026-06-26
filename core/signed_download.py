@@ -14,6 +14,7 @@ import base64
 import binascii
 import io
 import logging
+import os
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Optional
 
@@ -23,10 +24,39 @@ from googleapiclient.http import MediaIoBaseDownload
 
 logger = logging.getLogger(__name__)
 
-# Bytes pulled from Drive per range request. The googleapiclient default is 100MB,
-# which would buffer 100MB at a time — defeating the point. 8MB bounds per-download
-# memory while keeping the request count sane for large files.
-_DRIVE_CHUNK_SIZE = 8 * 1024 * 1024
+_DEFAULT_DRIVE_CHUNK_SIZE = 16 * 1024 * 1024  # 16 MB
+
+
+def _resolve_drive_chunk_size() -> int:
+    """Bytes pulled from Drive per range request.
+
+    Tunable via WORKSPACE_MCP_DRIVE_STREAM_CHUNK_BYTES to trade per-download memory
+    against round-trips (bigger = fewer requests/faster, more RAM per concurrent
+    download). The googleapiclient default is 100MB, which would buffer 100MB at a
+    time — defeating the point — so we always set our own.
+    """
+    raw = os.getenv("WORKSPACE_MCP_DRIVE_STREAM_CHUNK_BYTES", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+            logger.warning(
+                "WORKSPACE_MCP_DRIVE_STREAM_CHUNK_BYTES must be positive; got %r. "
+                "Using default %d.",
+                raw,
+                _DEFAULT_DRIVE_CHUNK_SIZE,
+            )
+        except ValueError:
+            logger.warning(
+                "Invalid WORKSPACE_MCP_DRIVE_STREAM_CHUNK_BYTES=%r; using default %d.",
+                raw,
+                _DEFAULT_DRIVE_CHUNK_SIZE,
+            )
+    return _DEFAULT_DRIVE_CHUNK_SIZE
+
+
+_DRIVE_CHUNK_SIZE = _resolve_drive_chunk_size()
 
 
 @dataclass

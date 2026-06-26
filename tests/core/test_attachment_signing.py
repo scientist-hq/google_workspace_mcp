@@ -15,7 +15,8 @@ from core.signed_download import get_fetcher
 @pytest.fixture(autouse=True)
 def _signing_key(monkeypatch):
     monkeypatch.setenv(
-        "WORKSPACE_MCP_ATTACHMENT_SIGNING_KEY", "test-signing-key-padding-to-32-bytes-min"
+        "WORKSPACE_MCP_ATTACHMENT_SIGNING_KEY",
+        "test-signing-key-padding-to-32-bytes-min",
     )
     yield
 
@@ -84,7 +85,9 @@ class TestRoundTrip:
 class TestSigningKeyFallback:
     def test_falls_back_to_client_secret(self, monkeypatch):
         monkeypatch.delenv("WORKSPACE_MCP_ATTACHMENT_SIGNING_KEY", raising=False)
-        monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-padded-to-32-bytes-minimum")
+        monkeypatch.setenv(
+            "GOOGLE_OAUTH_CLIENT_SECRET", "client-secret-padded-to-32-bytes-minimum"
+        )
         token = sign.mint_attachment_token(
             source="gmail",
             message_id="m",
@@ -94,9 +97,9 @@ class TestSigningKeyFallback:
         # Verifiable with the same fallback key.
         assert sign.verify_attachment_token(token) is not None
         # And the payload is signed with that secret, not the dedicated key.
-        assert jwt.decode(token, "client-secret-padded-to-32-bytes-minimum", algorithms=["HS256"])["sub"] == (
-            "u@example.com"
-        )
+        assert jwt.decode(
+            token, "client-secret-padded-to-32-bytes-minimum", algorithms=["HS256"]
+        )["sub"] == ("u@example.com")
 
     def test_raises_when_no_key_available(self, monkeypatch):
         monkeypatch.delenv("WORKSPACE_MCP_ATTACHMENT_SIGNING_KEY", raising=False)

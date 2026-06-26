@@ -69,7 +69,9 @@ class TestStashLoad:
     @pytest.mark.asyncio
     async def test_stash_then_load(self):
         creds = _sample_credentials()
-        stored = await cache.stash_credentials("user@example.com", creds, ttl_seconds=60)
+        stored = await cache.stash_credentials(
+            "user@example.com", creds, ttl_seconds=60
+        )
         assert stored is True
 
         loaded = await cache.load_credentials("user@example.com")
@@ -83,5 +85,7 @@ class TestStashLoad:
 
     @pytest.mark.asyncio
     async def test_isolation_between_emails(self):
-        await cache.stash_credentials("a@example.com", _sample_credentials(), ttl_seconds=60)
+        await cache.stash_credentials(
+            "a@example.com", _sample_credentials(), ttl_seconds=60
+        )
         assert await cache.load_credentials("b@example.com") is None

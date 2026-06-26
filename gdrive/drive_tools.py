@@ -499,9 +499,7 @@ async def get_drive_file_download_url(
             try:
                 from core.attachment_cred_cache import stash_credentials
 
-                await stash_credentials(
-                    user_google_email, creds, ttl_seconds=eff_ttl
-                )
+                await stash_credentials(user_google_email, creds, ttl_seconds=eff_ttl)
             except Exception as cache_exc:
                 logger.debug(
                     f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"

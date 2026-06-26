@@ -1804,9 +1804,7 @@ async def get_gmail_attachment_content(
             try:
                 from core.attachment_cred_cache import stash_credentials
 
-                await stash_credentials(
-                    user_google_email, creds, ttl_seconds=eff_ttl
-                )
+                await stash_credentials(user_google_email, creds, ttl_seconds=eff_ttl)
             except Exception as cache_exc:  # best-effort; same-process path still works
                 logger.debug(
                     f"[get_gmail_attachment_content] Could not pre-cache credentials: {cache_exc}"

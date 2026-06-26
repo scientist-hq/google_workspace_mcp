@@ -79,9 +79,7 @@ def _build_store():
         from cryptography.fernet import Fernet
         from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
-        valkey_host = os.getenv(
-            "WORKSPACE_MCP_OAUTH_PROXY_VALKEY_HOST", ""
-        ).strip()
+        valkey_host = os.getenv("WORKSPACE_MCP_OAUTH_PROXY_VALKEY_HOST", "").strip()
 
         if valkey_host:
             from key_value.aio.stores.valkey import ValkeyStore
@@ -105,9 +103,11 @@ def _build_store():
 
             # Mirror the proxy's TLS/timeout handling so remote/TLS Valkey doesn't
             # trip Glide's 250ms default request timeout.
-            tls_raw = os.getenv(
-                "WORKSPACE_MCP_OAUTH_PROXY_VALKEY_USE_TLS", ""
-            ).strip().lower()
+            tls_raw = (
+                os.getenv("WORKSPACE_MCP_OAUTH_PROXY_VALKEY_USE_TLS", "")
+                .strip()
+                .lower()
+            )
             use_tls = tls_raw in ("1", "true", "yes") if tls_raw else port == 6380
             glide_config = getattr(base, "_client_config", None)
             if glide_config is not None:
@@ -200,7 +200,9 @@ async def stash_credentials(
         )
         return True
     except Exception as exc:
-        logger.warning("Failed to cache attachment credentials for %s: %s", user_email, exc)
+        logger.warning(
+            "Failed to cache attachment credentials for %s: %s", user_email, exc
+        )
         return False
 
 

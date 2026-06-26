@@ -4,7 +4,6 @@ Focus on the Drive streaming path: bytes must reassemble exactly, and memory mus
 stay bounded to one chunk (the whole file never sits in RAM).
 """
 
-
 import pytest
 
 import core.signed_download as sd
@@ -62,7 +61,9 @@ def patched_drive(monkeypatch):
     monkeypatch.setattr(
         sd,
         "MediaIoBaseDownload",
-        lambda fh, request, chunksize=chunksize: _FakeDownloader(payload, fh, chunksize),
+        lambda fh, request, chunksize=chunksize: _FakeDownloader(
+            payload, fh, chunksize
+        ),
     )
     return payload, chunksize
 

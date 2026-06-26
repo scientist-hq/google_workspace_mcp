@@ -39,9 +39,12 @@ from auth.scopes import (  # noqa: E402
     GMAIL_SEND_SCOPE,
     get_scopes_for_tools,
     set_explicit_scopes,
+    set_enabled_tools as set_enabled_scope_tools,
+    set_read_only,
 )
 from core.tool_tier_loader import ToolTierLoader  # noqa: E402
 import core.tool_registry as tool_registry  # noqa: E402
+import auth.permissions as permissions  # noqa: E402
 
 
 # A couple of tool names that genuinely exist in core/tool_tiers.yaml. We assert
@@ -77,12 +80,20 @@ class TestGetAllToolNames:
 class TestExplicitScopeOverride:
     """auth/scopes.py: set_explicit_scopes() short-circuits get_scopes_for_tools()."""
 
-    def setup_method(self):
+    def _reset_scope_globals(self):
+        # Clear every global get_scopes_for_tools() consults, so the "normal path"
+        # tests genuinely exercise service-scope derivation instead of a leaked
+        # permissions / read-only short-circuit from another test.
         set_explicit_scopes(None)
+        set_read_only(False)
+        set_enabled_scope_tools(None)
+        permissions.set_permissions(None)
+
+    def setup_method(self):
+        self._reset_scope_globals()
 
     def teardown_method(self):
-        # Reset module-global state so other tests don't see a leaked override.
-        set_explicit_scopes(None)
+        self._reset_scope_globals()
 
     def test_override_returns_base_plus_exactly_that_scope(self):
         set_explicit_scopes({GMAIL_SEND_SCOPE})
@@ -213,6 +224,30 @@ class TestSelectionBranch:
             sys,
             "argv",
             ["main.py", "--only-tools", "send_gmail_message", "--tools", "gmail"],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main.main()
+
+        assert exc.value.code == 1
+        assert "--only-tools cannot be combined" in capsys.readouterr().err
+
+    def test_combined_with_exclude_tools_exits(self, monkeypatch, capsys):
+        # --only-tools already derives a minimal grant from its exact list; layering
+        # --exclude-tools on top would drop a tool from the surface while still
+        # requesting its scope. Reject the combination instead of leaking scope.
+        monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "main.py",
+                "--only-tools",
+                "send_gmail_message",
+                "manage_drive_access",
+                "--exclude-tools",
+                "manage_drive_access",
+            ],
         )
 
         with pytest.raises(SystemExit) as exc:

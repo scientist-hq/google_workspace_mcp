@@ -39,6 +39,8 @@ from auth.scopes import (  # noqa: E402
     DRIVE_FILE_SCOPE,
     get_scopes_for_tools,
     set_explicit_scopes,
+    set_enabled_tools as set_enabled_scope_tools,
+    set_read_only,
 )
 import auth.permissions as permissions  # noqa: E402
 import core.tool_registry as tool_registry  # noqa: E402
@@ -60,9 +62,7 @@ class FakeLocalProvider:
     """
 
     def __init__(self, tool_names):
-        self._components = {
-            f"tool:{name}@1": _FakeTool(name) for name in tool_names
-        }
+        self._components = {f"tool:{name}@1": _FakeTool(name) for name in tool_names}
 
     def remove_tool(self, name):
         self._components.pop(f"tool:{name}@1", None)
@@ -92,11 +92,15 @@ class FakeServer:
 @pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset module-global selection state so tests don't leak into each other."""
+    set_enabled_scope_tools(None)
+    set_read_only(False)
     tool_registry.set_enabled_tools(None)
     tool_registry.set_excluded_tools(None)
     set_explicit_scopes(None)
     permissions.set_permissions(None)
     yield
+    set_enabled_scope_tools(None)
+    set_read_only(False)
     tool_registry.set_enabled_tools(None)
     tool_registry.set_excluded_tools(None)
     set_explicit_scopes(None)

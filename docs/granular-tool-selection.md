@@ -55,9 +55,11 @@ OAuth grant. The token you mint can do nothing beyond what those specific tools
 require. This is the tightest possible grant for a given set of tools.
 
 `--only-tools` is **mutually exclusive** with `--tools`, `--tool-tier`,
-`--permissions`, and `--read-only` — it is a self-contained selector that picks
-both tools and scopes on its own, so combining it with another selector is
-contradictory and rejected with an error.
+`--permissions`, `--read-only`, **and `--exclude-tools`** — it is a self-contained
+selector that picks both tools and scopes on its own, so combining it with another
+selector is contradictory and rejected with an error. (Excluding one of its tools
+would drop that tool from the surface while still requesting its scope, defeating
+the minimal grant; just omit the tool from the `--only-tools` list instead.)
 
 **When to use it:** you want a purpose-built endpoint that does a few specific
 things and nothing else, with the smallest OAuth consent screen possible. An
@@ -76,7 +78,9 @@ set the *other* selectors produced. Crucially:
 - It **composes with** `--permissions`, `--tools`, `--tool-tier`, and the default
   (all-tools) mode. It is **not** mutually exclusive with them — you layer it on
   top. First the normal selector decides the tool/scope set; then
-  `--exclude-tools` trims named tools out of that set.
+  `--exclude-tools` trims named tools out of that set. (The one exception is
+  `--only-tools`, which already picks an exact list *and* its minimal scopes;
+  combining the two is rejected — see above.)
 - It does **not** change the requested OAuth scopes. The token keeps every scope
   the *remaining* tools need. This is the entire point: it lets you drop a tool
   whose scope is **shared** with tools you keep. The excluded tool is removed at
@@ -109,7 +113,7 @@ This is the single most important thing to understand about the two flags:
 | `--permissions` | scope-driven (per level) | cumulative levels | with `--tool-tier` |
 | `--tools` | whole service | whole service | with `--tool-tier` |
 | **`--only-tools`** | **arbitrary tool subset** | **minimal union of those tools** | **no (exclusive)** |
-| **`--exclude-tools`** | **arbitrary tool subset (removed)** | **none — scopes unchanged** | **yes (layers on top)** |
+| **`--exclude-tools`** | **arbitrary tool subset (removed)** | **none — scopes unchanged** | **yes, on top of any selector except `--only-tools`** |
 
 ## Worked real-world example: additive permission endpoints
 

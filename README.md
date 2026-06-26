@@ -527,8 +527,8 @@ uv run main.py --only-tools send_gmail_message manage_drive_access
 uv run main.py --permissions drive:full --exclude-tools manage_drive_access set_drive_file_permissions
 ```
 Two finer-grained selectors that go beyond the cumulative tiers/levels:
-- **`--only-tools`** — an exact (and possibly cross-service) tool allowlist that *also* derives the **minimal** OAuth scopes those tools need. Mutually exclusive with `--tools`, `--tool-tier`, `--permissions`, and `--read-only`.
-- **`--exclude-tools`** — a tool blocklist that **composes** with any other selector and **leaves scopes untouched** — for dropping a tool whose scope is shared with tools you keep (e.g. the Drive sharing tools under `drive:full`).
+- **`--only-tools`** — an exact (and possibly cross-service) tool allowlist that *also* derives the **minimal** OAuth scopes those tools need. Mutually exclusive with `--tools`, `--tool-tier`, `--permissions`, `--read-only`, and `--exclude-tools` (just omit a tool from the list rather than excluding it).
+- **`--exclude-tools`** — a tool blocklist that **composes** with any other selector (except `--only-tools`) and **leaves scopes untouched** — for dropping a tool whose scope is shared with tools you keep (e.g. the Drive sharing tools under `drive:full`).
 
 Both are **CLI-only** — there's no `WORKSPACE_MCP_*` environment-variable form for them.
 

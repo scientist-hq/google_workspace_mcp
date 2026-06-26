@@ -484,12 +484,15 @@ def main():
         or args.tool_tier is not None
         or args.permissions is not None
         or args.read_only
+        or args.exclude_tools is not None
     ):
         print(
             "Error: --only-tools cannot be combined with --tools, --tool-tier, "
-            "--permissions, or --read-only "
+            "--permissions, --read-only, or --exclude-tools "
             "(via CLI flag or WORKSPACE_MCP_* env var). "
-            "--only-tools is an exact per-tool allowlist and selects scopes on its own.",
+            "--only-tools is an exact per-tool allowlist and selects scopes on its "
+            "own — excluding one of its tools would drop it from the surface while "
+            "still requesting its scope, so just omit it from --only-tools instead.",
             file=sys.stderr,
         )
         sys.exit(1)

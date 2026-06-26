@@ -155,3 +155,43 @@ class TestFetcherRegistry:
 
     def test_unknown_source_is_none(self):
         assert get_fetcher("ftp") is None
+
+
+class TestClampTtlToExpiry:
+    """A signed URL must never outlive its (non-refreshable) credential snapshot."""
+
+    def _now(self):
+        from datetime import datetime, timezone
+
+        return datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_none_expiry_returns_default(self):
+        assert sign.clamp_ttl_to_expiry(None, default_ttl=900) == 900
+
+    def test_far_future_expiry_capped_at_default(self):
+        from datetime import timedelta
+
+        expiry = (self._now() + timedelta(hours=1)).replace(tzinfo=None)  # naive UTC
+        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) == 900
+
+    def test_near_expiry_clamps_below_token_life(self):
+        from datetime import timedelta
+
+        # 5 min of token life left -> 300 - 30 margin = 270, under the 900 default.
+        expiry = (self._now() + timedelta(seconds=300)).replace(tzinfo=None)
+        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) == 270
+
+    def test_expired_token_floors_at_30(self):
+        from datetime import timedelta
+
+        expiry = (self._now() - timedelta(seconds=120)).replace(tzinfo=None)
+        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) == 30
+
+    def test_url_never_outlives_snapshot(self):
+        # Property: clamped TTL + margin <= remaining token life (unless floored).
+        from datetime import timedelta
+
+        for secs in (60, 120, 600, 3600):
+            expiry = (self._now() + timedelta(seconds=secs)).replace(tzinfo=None)
+            ttl = sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now())
+            assert ttl <= max(30, secs)

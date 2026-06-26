@@ -1753,6 +1753,68 @@ async def get_gmail_attachment_content(
         f"[get_gmail_attachment_content] Invoked. Message ID: '{message_id}', Email: '{user_google_email}'"
     )
 
+    # Design A: signed-URL streaming. When enabled, hand the client a short-lived
+    # signed URL instead of downloading the bytes here. The /attachments/signed
+    # route verifies the token, recovers this user's credentials, and streams the
+    # bytes straight from Gmail on demand — no base64 through the model, nothing on
+    # disk. This is the path the stateless hosted gateway needs; base64 is slow and
+    # token-hungry, and we never even fetch the attachment in this process.
+    from core.attachment_signing import (
+        signed_attachment_urls_enabled,
+        mint_attachment_token,
+        get_signed_attachment_url,
+        ATTACHMENT_URL_TTL_SECONDS,
+    )
+
+    if signed_attachment_urls_enabled():
+        # We do NOT resolve the filename here. Gmail attachment ids are ephemeral and
+        # rotate between fetches, so the id in this request usually no longer matches
+        # the message payload — and resolving by size would require downloading the
+        # bytes, which this design avoids. Instead the /attachments/signed route
+        # resolves the filename by byte size after it streams, where the size is
+        # known and stable. (Stable-id sources like Drive can sign filename/mime into
+        # the token via mint_attachment_token's filename/mime_type params instead.)
+        token = mint_attachment_token(
+            source="gmail",
+            message_id=message_id,
+            attachment_id=attachment_id,
+            user_email=user_google_email,
+        )
+        download_url = get_signed_attachment_url(token)
+
+        # Stash this owner's credentials in the shared, short-TTL cache so the
+        # /attachments/signed route can recover them by email even if the fetch
+        # lands on a different replica than this tool call (the hosted, multi-
+        # replica case). We are inside the authenticated request here, so the
+        # credentials are available from the session store.
+        try:
+            from auth.oauth21_session_store import get_oauth21_session_store
+            from core.attachment_cred_cache import stash_credentials
+
+            creds = get_oauth21_session_store().get_credentials(user_google_email)
+            if creds:
+                await stash_credentials(
+                    user_google_email, creds, ttl_seconds=ATTACHMENT_URL_TTL_SECONDS
+                )
+        except Exception as cache_exc:  # best-effort; same-process path still works
+            logger.debug(
+                f"[get_gmail_attachment_content] Could not pre-cache credentials: {cache_exc}"
+            )
+        logger.info(
+            "[get_gmail_attachment_content] Returning signed streaming URL (no download)"
+        )
+        return "\n".join(
+            [
+                "Attachment ready — streamed on demand (no base64, nothing stored).",
+                f"Message ID: {message_id}",
+                f"\n📎 Download URL: {download_url}",
+                "\nThe server streams the bytes directly from Gmail when this URL is "
+                "fetched; the link is signed to you and expires in ~15 minutes.",
+                "\nNote: Attachment IDs are ephemeral. Always use IDs from the most "
+                "recent message fetch.",
+            ]
+        )
+
     # Download attachment content first, then optionally re-fetch message metadata
     # to resolve filename and MIME type for the saved file.
     try:

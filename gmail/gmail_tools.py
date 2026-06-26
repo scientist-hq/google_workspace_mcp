@@ -1763,7 +1763,7 @@ async def get_gmail_attachment_content(
         signed_attachment_urls_enabled,
         mint_attachment_token,
         get_signed_attachment_url,
-        ATTACHMENT_URL_TTL_SECONDS,
+        clamp_ttl_to_expiry,
     )
 
     if signed_attachment_urls_enabled():
@@ -1774,32 +1774,43 @@ async def get_gmail_attachment_content(
         # resolves the filename by byte size after it streams, where the size is
         # known and stable. (Stable-id sources like Drive can sign filename/mime into
         # the token via mint_attachment_token's filename/mime_type params instead.)
+        # Recover this owner's credentials up front. We use them to (a) stash a
+        # snapshot in the shared cache so the /attachments/signed route can recover
+        # them by email on any replica, and (b) CLAMP the URL/cache TTL to the
+        # token's remaining life. In OAuth 2.1 proxy mode the recovered token has no
+        # refresh_token, so a URL must not outlive the snapshot it depends on.
+        from auth.oauth21_session_store import get_oauth21_session_store
+
+        creds = None
+        try:
+            creds = get_oauth21_session_store().get_credentials(user_google_email)
+        except Exception as cred_exc:
+            logger.debug(
+                f"[get_gmail_attachment_content] Could not recover credentials: {cred_exc}"
+            )
+
+        eff_ttl = clamp_ttl_to_expiry(creds.expiry if creds else None)
+
         token = mint_attachment_token(
             source="gmail",
             message_id=message_id,
             attachment_id=attachment_id,
             user_email=user_google_email,
+            ttl_seconds=eff_ttl,
         )
         download_url = get_signed_attachment_url(token)
 
-        # Stash this owner's credentials in the shared, short-TTL cache so the
-        # /attachments/signed route can recover them by email even if the fetch
-        # lands on a different replica than this tool call (the hosted, multi-
-        # replica case). We are inside the authenticated request here, so the
-        # credentials are available from the session store.
-        try:
-            from auth.oauth21_session_store import get_oauth21_session_store
-            from core.attachment_cred_cache import stash_credentials
+        if creds:
+            try:
+                from core.attachment_cred_cache import stash_credentials
 
-            creds = get_oauth21_session_store().get_credentials(user_google_email)
-            if creds:
                 await stash_credentials(
-                    user_google_email, creds, ttl_seconds=ATTACHMENT_URL_TTL_SECONDS
+                    user_google_email, creds, ttl_seconds=eff_ttl
                 )
-        except Exception as cache_exc:  # best-effort; same-process path still works
-            logger.debug(
-                f"[get_gmail_attachment_content] Could not pre-cache credentials: {cache_exc}"
-            )
+            except Exception as cache_exc:  # best-effort; same-process path still works
+                logger.debug(
+                    f"[get_gmail_attachment_content] Could not pre-cache credentials: {cache_exc}"
+                )
         logger.info(
             "[get_gmail_attachment_content] Returning signed streaming URL (no download)"
         )

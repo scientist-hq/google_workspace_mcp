@@ -660,6 +660,12 @@ def configure_server_for_http():
                     client_storage=client_storage,
                     jwt_signing_key=jwt_signing_key,
                     allowed_client_redirect_uris=allowed_client_redirect_uris,
+                    # Refresh the upstream Google token ~5 min before expiry rather
+                    # than only after it lapses. This keeps the credential snapshot
+                    # captured during a request (and stashed for signed-download URLs)
+                    # fuller-lived, so TTL-clamped URLs don't collapse toward their
+                    # floor near the hourly token boundary.
+                    token_expiry_threshold_seconds=300,
                 )
                 if provider.client_registration_options is not None:
                     # Keep protocol-level auth limited to base identity scopes, but
@@ -792,6 +798,37 @@ async def serve_signed_attachment(request: Request):
             {"error": "No active session for this download's owner"},
             status_code=401,
         )
+
+    # The recovered credential may be an expired Google access token. In OAuth 2.1
+    # proxy mode it carries no refresh_token (the proxy holds upstream refresh,
+    # unreachable from this bearer-less route), so an expired token can't be renewed
+    # here. Mirror the repo's own idiom (auth/google_auth.py) and return a precise
+    # retryable 401 instead of letting a failed refresh fall through to a 502. Use
+    # `.valid` (not `.expired`): a cached record may have expiry=None, for which
+    # `.expired` is False and would slip a dead token past this guard.
+    if not credentials.valid:
+        if credentials.refresh_token:  # forward-compat; today always None (see issue)
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+
+            try:
+                await asyncio.to_thread(credentials.refresh, GoogleAuthRequest())
+            except Exception:
+                logger.info(
+                    "Signed download: token refresh failed for %s; re-auth needed",
+                    user_email,
+                )
+                return JSONResponse(
+                    {"error": "credentials expired - re-authenticate"}, status_code=401
+                )
+        else:
+            logger.info(
+                "Signed download: expired non-refreshable credentials for %s; "
+                "re-auth needed",
+                user_email,
+            )
+            return JSONResponse(
+                {"error": "credentials expired - re-authenticate"}, status_code=401
+            )
 
     try:
         result = await fetcher(claims, credentials)

@@ -461,37 +461,51 @@ async def get_drive_file_download_url(
         signed_attachment_urls_enabled,
         mint_download_token,
         get_signed_attachment_url,
-        ATTACHMENT_URL_TTL_SECONDS,
+        clamp_ttl_to_expiry,
     )
 
     if signed_attachment_urls_enabled():
         ref = {"fid": file_id}
         if export_mime_type:
             ref["emt"] = export_mime_type  # native Google file → export, not get_media
+
+        # Recover the owner's credentials up front: stash a snapshot so the route can
+        # recover them by email on any replica, and CLAMP the URL/cache TTL to the
+        # token's remaining life. In OAuth 2.1 proxy mode the recovered token has no
+        # refresh_token, so a URL must not outlive the snapshot it depends on.
+        from auth.oauth21_session_store import get_oauth21_session_store
+
+        creds = None
+        try:
+            creds = get_oauth21_session_store().get_credentials(user_google_email)
+        except Exception as cred_exc:
+            logger.debug(
+                f"[get_drive_file_download_url] Could not recover credentials: {cred_exc}"
+            )
+
+        eff_ttl = clamp_ttl_to_expiry(creds.expiry if creds else None)
+
         token = mint_download_token(
             source="drive",
             user_email=user_google_email,
             ref=ref,
             filename=output_filename,
             mime_type=output_mime_type,
+            ttl_seconds=eff_ttl,
         )
         download_url = get_signed_attachment_url(token)
 
-        # Stash the owner's credentials in the shared, short-TTL cache so the route
-        # can recover them by email even on a replica that never ran this tool call.
-        try:
-            from auth.oauth21_session_store import get_oauth21_session_store
-            from core.attachment_cred_cache import stash_credentials
+        if creds:
+            try:
+                from core.attachment_cred_cache import stash_credentials
 
-            creds = get_oauth21_session_store().get_credentials(user_google_email)
-            if creds:
                 await stash_credentials(
-                    user_google_email, creds, ttl_seconds=ATTACHMENT_URL_TTL_SECONDS
+                    user_google_email, creds, ttl_seconds=eff_ttl
                 )
-        except Exception as cache_exc:
-            logger.debug(
-                f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"
-            )
+            except Exception as cache_exc:
+                logger.debug(
+                    f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"
+                )
 
         logger.info(
             "[get_drive_file_download_url] Returning signed streaming URL (no download)"

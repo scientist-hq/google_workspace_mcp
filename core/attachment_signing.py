@@ -24,6 +24,7 @@ extra configuration in the single-profile PoC, but a dedicated
 
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import jwt
@@ -34,10 +35,50 @@ _ALG = "HS256"
 ATTACHMENT_URL_TTL_SECONDS = 900  # 15 minutes
 _DEFAULT_TTL_SECONDS = ATTACHMENT_URL_TTL_SECONDS
 
+# Keep a signed URL strictly inside the credential snapshot's remaining life, and
+# never shorter than this floor.
+_TTL_EXPIRY_MARGIN_SECONDS = 30
+_TTL_FLOOR_SECONDS = 30
+
 
 def signed_attachment_urls_enabled() -> bool:
     """True when the tool should return signed streaming URLs instead of base64/disk."""
     return os.getenv("WORKSPACE_MCP_SIGNED_ATTACHMENT_URLS", "false").lower() == "true"
+
+
+def clamp_ttl_to_expiry(
+    expiry: Optional[datetime],
+    default_ttl: int = ATTACHMENT_URL_TTL_SECONDS,
+    *,
+    now: Optional[datetime] = None,
+) -> int:
+    """Clamp a signed-URL TTL so the link never outlives its credential snapshot.
+
+    In OAuth 2.1 proxy mode the recovered credential is a bare access token with no
+    refresh_token, so once it expires the signed-download route cannot renew it.
+    The URL must therefore expire no later than the token. Returns:
+
+      - ``default_ttl`` when ``expiry`` is None (unknown remaining life);
+      - otherwise ``max(floor, min(default_ttl, seconds_left - margin))``.
+
+    Args:
+        expiry: The credential's expiry as a naive UTC datetime
+            (``google.oauth2.credentials.Credentials.expiry``), or None.
+        default_ttl: The desired TTL when not constrained by the token.
+        now: Reference time (naive/aware UTC); defaults to ``datetime.now(UTC)``.
+    """
+    if expiry is None:
+        return default_ttl
+    ref = now or datetime.now(timezone.utc)
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    seconds_left = (expiry.replace(tzinfo=timezone.utc) - ref).total_seconds()
+    return int(
+        max(
+            _TTL_FLOOR_SECONDS,
+            min(default_ttl, seconds_left - _TTL_EXPIRY_MARGIN_SECONDS),
+        )
+    )
 
 
 def _signing_key() -> str:

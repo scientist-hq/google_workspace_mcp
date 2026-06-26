@@ -452,6 +452,62 @@ async def get_drive_file_download_url(
             if not output_filename.endswith(".pdf"):
                 output_filename = f"{Path(output_filename).stem}.pdf"
 
+    # Design A: signed-URL streaming. Drive file ids are stable, so we resolve the
+    # filename/MIME above and sign them straight into the token; the /attachments/
+    # signed route streams the bytes (get_media / export_media) on demand. No base64
+    # through the model, nothing on disk — the path the stateless hosted gateway
+    # needs. We early-return before downloading anything in this process.
+    from core.attachment_signing import (
+        signed_attachment_urls_enabled,
+        mint_download_token,
+        get_signed_attachment_url,
+        ATTACHMENT_URL_TTL_SECONDS,
+    )
+
+    if signed_attachment_urls_enabled():
+        ref = {"fid": file_id}
+        if export_mime_type:
+            ref["emt"] = export_mime_type  # native Google file → export, not get_media
+        token = mint_download_token(
+            source="drive",
+            user_email=user_google_email,
+            ref=ref,
+            filename=output_filename,
+            mime_type=output_mime_type,
+        )
+        download_url = get_signed_attachment_url(token)
+
+        # Stash the owner's credentials in the shared, short-TTL cache so the route
+        # can recover them by email even on a replica that never ran this tool call.
+        try:
+            from auth.oauth21_session_store import get_oauth21_session_store
+            from core.attachment_cred_cache import stash_credentials
+
+            creds = get_oauth21_session_store().get_credentials(user_google_email)
+            if creds:
+                await stash_credentials(
+                    user_google_email, creds, ttl_seconds=ATTACHMENT_URL_TTL_SECONDS
+                )
+        except Exception as cache_exc:
+            logger.debug(
+                f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"
+            )
+
+        logger.info(
+            "[get_drive_file_download_url] Returning signed streaming URL (no download)"
+        )
+        return "\n".join(
+            [
+                "File ready — streamed on demand (no base64, nothing stored).",
+                f"File: {file_name}",
+                f"File ID: {file_id}",
+                f"MIME Type: {output_mime_type}",
+                f"\n📎 Download URL: {download_url}",
+                "\nThe server streams the bytes directly from Drive when this URL is "
+                "fetched; the link is signed to you and expires in ~15 minutes.",
+            ]
+        )
+
     # Download the file
     request_obj = (
         service.files().export_media(fileId=file_id, mimeType=export_mime_type)

@@ -11,6 +11,7 @@ import jwt
 import pytest
 
 from core import attachment_signing as sign
+from core.signed_download import get_fetcher
 
 
 @pytest.fixture(autouse=True)
@@ -111,3 +112,46 @@ class TestUrlBuilder:
         monkeypatch.setenv("WORKSPACE_EXTERNAL_URL", "https://gw.example.com/")
         url = sign.get_signed_attachment_url("TOK")
         assert url == "https://gw.example.com/attachments/signed/TOK"
+
+
+class TestDownloadToken:
+    def test_gmail_wrapper_matches_generic(self):
+        # mint_attachment_token is a thin Gmail wrapper over mint_download_token.
+        claims = sign.verify_attachment_token(
+            sign.mint_attachment_token(
+                source="gmail",
+                message_id="msg1",
+                attachment_id="att1",
+                user_email="user@example.com",
+            )
+        )
+        assert claims["src"] == "gmail"
+        assert claims["mid"] == "msg1"
+        assert claims["aid"] == "att1"
+        assert "fn" not in claims  # Gmail resolves filename in the route, by size
+
+    def test_drive_token_carries_ref_and_filename(self):
+        claims = sign.verify_attachment_token(
+            sign.mint_download_token(
+                source="drive",
+                user_email="user@example.com",
+                ref={"fid": "FILE123", "emt": "application/pdf"},
+                filename="Report.pdf",
+                mime_type="application/pdf",
+            )
+        )
+        assert claims["src"] == "drive"
+        assert claims["fid"] == "FILE123"
+        assert claims["emt"] == "application/pdf"
+        # Drive ids are stable, so filename/MIME are signed in at mint.
+        assert claims["fn"] == "Report.pdf"
+        assert claims["mt"] == "application/pdf"
+
+
+class TestFetcherRegistry:
+    def test_known_sources_resolve(self):
+        assert get_fetcher("gmail") is not None
+        assert get_fetcher("drive") is not None
+
+    def test_unknown_source_is_none(self):
+        assert get_fetcher("ftp") is None

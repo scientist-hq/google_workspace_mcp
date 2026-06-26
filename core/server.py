@@ -743,39 +743,35 @@ async def serve_attachment(request: Request):
 
 @server.custom_route("/attachments/signed/{token}", methods=["GET"])
 async def serve_signed_attachment(request: Request):
-    """Stream a Gmail attachment from a signed capability URL (Design A).
+    """Stream a Google resource from a signed capability URL (Design A).
 
     Unlike ``/attachments/{file_id}`` (which serves a file written to disk), this
-    route stores nothing. The signed token carries the attachment reference and its
-    owner; we verify the signature, recover the owner's Google credentials, fetch
-    the bytes from Gmail on demand, and stream them back. The signature *is* the
-    per-user authorization — no bearer token is needed on the request, so an agent
-    can hand the URL to any HTTP client.
+    route stores nothing. The signed token carries the resource reference, its
+    source (Gmail attachment, Drive file, ...), and its owner; we verify the
+    signature, recover the owner's Google credentials, dispatch to the matching
+    fetcher (``core.signed_download``), and stream the bytes back. The signature
+    *is* the per-user authorization — no bearer token is needed on the request, so
+    an agent can hand the URL to any HTTP client.
 
-    Note (hosted scale): credential recovery reads this process's session store, so
-    in a multi-replica deployment the owner's session must live in a shared store
-    (Valkey) reachable by every replica. The single-instance PoC satisfies this
-    trivially.
+    Credential recovery is two-tier: the in-process OAuth 2.1 session store first,
+    then a shared short-TTL Valkey cache, so the URL works even when the request
+    lands on a replica that never ran the originating tool call.
     """
-    import base64
-    import binascii
-
     from core.attachment_signing import verify_attachment_token
     from auth.oauth21_session_store import get_oauth21_session_store
-    from googleapiclient.discovery import build
+    from core.signed_download import get_fetcher, SignedDownloadError
 
     token = request.path_params["token"]
     claims = verify_attachment_token(token)
-    if not claims or claims.get("src") != "gmail":
+    if not claims:
         return JSONResponse(
-            {"error": "Invalid or expired attachment link"}, status_code=403
+            {"error": "Invalid or expired download link"}, status_code=403
         )
 
-    message_id = claims.get("mid")
-    attachment_id = claims.get("aid")
     user_email = claims.get("sub")
-    if not (message_id and attachment_id and user_email):
-        return JSONResponse({"error": "Malformed attachment link"}, status_code=403)
+    fetcher = get_fetcher(claims.get("src", ""))
+    if not (user_email and fetcher):
+        return JSONResponse({"error": "Malformed download link"}, status_code=403)
 
     # Recover the owner's credentials. In-process session first (the common
     # same-process case); then the shared short-TTL cache, which is the path that
@@ -787,86 +783,17 @@ async def serve_signed_attachment(request: Request):
         credentials = await load_credentials(user_email)
     if not credentials:
         return JSONResponse(
-            {"error": "No active session for this attachment's owner"},
+            {"error": "No active session for this download's owner"},
             status_code=401,
         )
 
     try:
-        gmail = build("gmail", "v1", credentials=credentials)
-        attachment = await asyncio.to_thread(
-            gmail.users()
-            .messages()
-            .attachments()
-            .get(userId="me", messageId=message_id, id=attachment_id)
-            .execute
-        )
-    except Exception as e:
-        logger.error("Signed attachment fetch failed: %s", e, exc_info=True)
+        raw, filename, media_type = await fetcher(claims, credentials)
+    except SignedDownloadError as e:
+        logger.error("Signed download fetch failed: %s", e)
         return JSONResponse(
-            {"error": "Failed to fetch attachment from Gmail"}, status_code=502
+            {"error": "Failed to fetch the requested resource"}, status_code=502
         )
-
-    data = attachment.get("data", "")
-    if not data:
-        return JSONResponse({"error": "Attachment has no content"}, status_code=404)
-
-    # Gmail returns URL-safe base64; pad before decoding.
-    try:
-        raw = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
-    except (binascii.Error, ValueError) as e:
-        logger.error("Signed attachment decode failed: %s", e)
-        return JSONResponse({"error": "Attachment decode failed"}, status_code=502)
-
-    # Filename / MIME. Prefer values signed into the token (used by stable-id
-    # sources like Drive). For Gmail the attachment id is ephemeral and has usually
-    # rotated by now, so resolve against the message payload by *byte size* — the
-    # stable key, exactly what the download tool's own fallback uses. We have the
-    # real size here because we just decoded the bytes.
-    filename = claims.get("fn") or "attachment"
-    media_type = claims.get("mt") or "application/octet-stream"
-    if not claims.get("fn"):
-        try:
-            from gmail.gmail_tools import _extract_attachments
-
-            meta = await asyncio.to_thread(
-                gmail.users()
-                .messages()
-                .get(
-                    userId="me",
-                    id=message_id,
-                    format="full",
-                    fields="payload(parts(filename,mimeType,body(attachmentId,size)),body(attachmentId,size),filename,mimeType)",
-                )
-                .execute
-            )
-            atts = _extract_attachments(meta.get("payload", {}))
-
-            chosen = None
-            # Exact id first (covers the case where it hasn't rotated yet).
-            for att in atts:
-                if att.get("attachmentId") == attachment_id:
-                    chosen = att
-                    break
-            # Else the attachment whose size matches the bytes we just streamed.
-            if chosen is None:
-                size_matches = [
-                    att
-                    for att in atts
-                    if att.get("size") and abs(att["size"] - len(raw)) < 100
-                ]
-                if len(size_matches) == 1:
-                    chosen = size_matches[0]
-            # Else, if there's only one attachment, it's unambiguous.
-            if chosen is None and len(atts) == 1:
-                chosen = atts[0]
-
-            if chosen:
-                filename = chosen.get("filename") or filename
-                media_type = chosen.get("mimeType") or media_type
-        except Exception:
-            logger.debug(
-                "Could not resolve filename for signed attachment; using defaults"
-            )
 
     return Response(
         content=raw,

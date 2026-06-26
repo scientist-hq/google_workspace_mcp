@@ -57,6 +57,7 @@ class TestGetAllToolNames:
     """ToolTierLoader.get_all_tool_names() — the validation source of truth."""
 
     def test_returns_non_empty_set(self):
+        """get_all_tool_names() returns a non-empty set."""
         names = ToolTierLoader().get_all_tool_names()
         assert isinstance(names, set)
         assert len(names) > 0
@@ -81,21 +82,27 @@ class TestExplicitScopeOverride:
     """auth/scopes.py: set_explicit_scopes() short-circuits get_scopes_for_tools()."""
 
     def _reset_scope_globals(self):
-        # Clear every global get_scopes_for_tools() consults, so the "normal path"
-        # tests genuinely exercise service-scope derivation instead of a leaked
-        # permissions / read-only short-circuit from another test.
+        """Clear every global ``get_scopes_for_tools()`` consults.
+
+        Ensures the "normal path" tests genuinely exercise service-scope
+        derivation instead of a leaked permissions / read-only short-circuit from
+        another test.
+        """
         set_explicit_scopes(None)
         set_read_only(False)
         set_enabled_scope_tools(None)
         permissions.set_permissions(None)
 
     def setup_method(self):
+        """Reset scope globals before each test."""
         self._reset_scope_globals()
 
     def teardown_method(self):
+        """Reset scope globals after each test."""
         self._reset_scope_globals()
 
     def test_override_returns_base_plus_exactly_that_scope(self):
+        """An explicit override yields exactly BASE_SCOPES + the override scope."""
         set_explicit_scopes({GMAIL_SEND_SCOPE})
         scopes = get_scopes_for_tools()
 
@@ -110,11 +117,13 @@ class TestExplicitScopeOverride:
         assert scopes == set(BASE_SCOPES) | {GMAIL_SEND_SCOPE}
 
     def test_override_returns_unique_scopes(self):
+        """The returned scope list contains no duplicates."""
         set_explicit_scopes({GMAIL_SEND_SCOPE})
         scopes = get_scopes_for_tools()
         assert len(scopes) == len(set(scopes))
 
     def test_clearing_override_reverts_to_normal_behavior(self):
+        """Clearing the override restores normal service-scope derivation."""
         set_explicit_scopes({GMAIL_SEND_SCOPE})
         assert set(get_scopes_for_tools(["drive"])) == set(BASE_SCOPES) | {
             GMAIL_SEND_SCOPE
@@ -143,6 +152,7 @@ class TestSelectionBranch:
     """
 
     def _reset(self):
+        """Reset every tool-registry and scope global these tests touch."""
         tool_registry.set_enabled_tools(None)
         set_explicit_scopes(None)
         set_enabled_scope_tools(None)
@@ -150,9 +160,11 @@ class TestSelectionBranch:
         permissions.set_permissions(None)
 
     def setup_method(self):
+        """Reset selection/scope globals before each test."""
         self._reset()
 
     def teardown_method(self):
+        """Reset selection/scope globals after each test."""
         self._reset()
 
     def test_selection_resolves_services_and_allowlist(self):
@@ -178,6 +190,7 @@ class TestSelectionBranch:
         assert main.set_enabled_tool_names is tool_registry.set_enabled_tools
 
     def test_unknown_tool_name_exits(self, monkeypatch, capsys):
+        """An unknown --only-tools name exits(1) with an 'unknown tool name' error."""
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
         monkeypatch.setattr(
             sys,
@@ -192,6 +205,7 @@ class TestSelectionBranch:
         assert "unknown tool name" in capsys.readouterr().err.lower()
 
     def test_combined_with_read_only_exits(self, monkeypatch, capsys):
+        """--only-tools + --read-only exits(1) with the 'cannot be combined' error."""
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
         monkeypatch.setattr(
             sys,
@@ -206,6 +220,7 @@ class TestSelectionBranch:
         assert "--only-tools cannot be combined" in capsys.readouterr().err
 
     def test_combined_with_tool_tier_exits(self, monkeypatch, capsys):
+        """--only-tools + --tool-tier exits(1) with the 'cannot be combined' error."""
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
         monkeypatch.setattr(
             sys,
@@ -226,6 +241,7 @@ class TestSelectionBranch:
         assert "--only-tools cannot be combined" in capsys.readouterr().err
 
     def test_combined_with_tools_exits(self, monkeypatch, capsys):
+        """--only-tools + --tools exits(1) with the 'cannot be combined' error."""
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
         monkeypatch.setattr(
             sys,
@@ -240,6 +256,7 @@ class TestSelectionBranch:
         assert "--only-tools cannot be combined" in capsys.readouterr().err
 
     def test_combined_with_exclude_tools_exits(self, monkeypatch, capsys):
+        """--only-tools + --exclude-tools exits(1) with the 'cannot be combined' error."""
         # --only-tools already derives a minimal grant from its exact list; layering
         # --exclude-tools on top would drop a tool from the surface while still
         # requesting its scope. Reject the combination instead of leaking scope.
@@ -278,6 +295,7 @@ class TestSelectionBranch:
             pass
 
         def _stop(*_a, **_k):
+            """Sentinel: halt main() at the server-launch step."""
             raise _StopBeforeServer()
 
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)

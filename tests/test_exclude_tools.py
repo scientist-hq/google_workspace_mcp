@@ -62,14 +62,17 @@ class FakeLocalProvider:
     """
 
     def __init__(self, tool_names):
+        """Seed the fake component map from the given tool names."""
         self._components = {f"tool:{name}@1": _FakeTool(name) for name in tool_names}
 
     def remove_tool(self, name):
+        """Remove a tool by name, mirroring ``local_provider.remove_tool``."""
         self._components.pop(f"tool:{name}@1", None)
 
 
 class _FakeTool:
     def __init__(self, name):
+        """A fake tool exposing the attributes ``filter_server_tools`` reads."""
         # filter_server_tools reads ._required_google_scopes off .fn; the
         # exclude-tools branch never inspects scopes, but other branches might,
         # so give every fake tool a harmless empty scope list.
@@ -80,9 +83,11 @@ class _FakeTool:
 
 class FakeServer:
     def __init__(self, tool_names):
+        """Wrap a FakeLocalProvider seeded with the given tool names."""
         self.local_provider = FakeLocalProvider(tool_names)
 
     def tool_names(self):
+        """Return the set of tool names currently registered."""
         return {
             key.split(":", 1)[1].rsplit("@", 1)[0]
             for key in self.local_provider._components
@@ -111,6 +116,7 @@ class TestExcludedToolsRegistry:
     """core/tool_registry.py: the blocklist setter/getter and filter branch."""
 
     def test_set_and_get_round_trip(self):
+        """set_excluded_tools()/get_excluded_tools() round-trip, including clearing."""
         assert tool_registry.get_excluded_tools() is None
         tool_registry.set_excluded_tools({"manage_drive_access"})
         assert tool_registry.get_excluded_tools() == {"manage_drive_access"}
@@ -163,6 +169,7 @@ class TestComposesWithPermissions:
             pass
 
         def _boom(arg):
+            """Sentinel: prove the selection chain was reached past the guards."""
             raise _ReachedSelection()
 
         # parse_permissions_arg is the first thing the --permissions branch calls,
@@ -192,6 +199,7 @@ class TestComposesWithPermissions:
 
 class TestUnknownToolValidation:
     def test_unknown_tool_name_exits(self, monkeypatch, capsys):
+        """An unknown --exclude-tools name exits(1) with an 'unknown tool name' error."""
         monkeypatch.setattr(main, "configure_safe_logging", lambda: None)
         monkeypatch.setattr(main, "resolve_callback_port_for_transport", lambda t: None)
         monkeypatch.setattr(main, "validate_streamable_http_auth", lambda t: None)

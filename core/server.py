@@ -838,7 +838,27 @@ async def serve_signed_attachment(request: Request):
             {"error": "Failed to fetch the requested resource"}, status_code=502
         )
 
-    headers = {"Content-Disposition": f'attachment; filename="{result.filename}"'}
+    # Build a safe Content-Disposition. The filename comes from Gmail/Drive metadata
+    # (attacker-influenceable), so strip quotes/CR/LF for the ASCII fallback to
+    # prevent header injection, and add an RFC 5987 `filename*` so non-ASCII names
+    # survive intact (percent-encoded, no injection).
+    from urllib.parse import quote as _urlquote
+
+    raw_name = result.filename or "download"
+    ascii_name = (
+        raw_name.encode("ascii", "ignore")
+        .decode()
+        .replace('"', "")
+        .replace("\\", "")
+        .replace("\r", "")
+        .replace("\n", "")
+    ) or "download"
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{_urlquote(raw_name, safe='')}"
+        )
+    }
     if result.stream is not None:
         # Bounded-memory streaming (Drive): chunks flow straight to the client.
         return StreamingResponse(

@@ -17,6 +17,7 @@ from core import attachment_cred_cache as cache
 def _reset_store(monkeypatch):
     # Force the in-process MemoryStore fallback and a clean singleton each test.
     monkeypatch.delenv("WORKSPACE_MCP_OAUTH_PROXY_VALKEY_HOST", raising=False)
+    monkeypatch.delenv("WORKSPACE_MCP_OAUTH_PROXY_STORAGE_BACKEND", raising=False)
     monkeypatch.setattr(cache, "_store", None)
     monkeypatch.setattr(cache, "_store_built", False)
     yield

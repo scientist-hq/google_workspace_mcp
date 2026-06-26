@@ -35,10 +35,12 @@ _ALG = "HS256"
 ATTACHMENT_URL_TTL_SECONDS = 900  # 15 minutes
 _DEFAULT_TTL_SECONDS = ATTACHMENT_URL_TTL_SECONDS
 
-# Keep a signed URL strictly inside the credential snapshot's remaining life, and
-# never shorter than this floor.
+# Keep a signed URL strictly inside the credential snapshot's remaining life: the
+# URL must expire at least this margin before the credential does.
 _TTL_EXPIRY_MARGIN_SECONDS = 30
-_TTL_FLOOR_SECONDS = 30
+
+# Reserved JWT claim keys that a source-specific ``ref`` must never override.
+_RESERVED_CLAIMS = frozenset({"src", "sub", "iat", "exp", "fn", "mt"})
 
 
 def signed_attachment_urls_enabled() -> bool:
@@ -59,7 +61,12 @@ def clamp_ttl_to_expiry(
     The URL must therefore expire no later than the token. Returns:
 
       - ``default_ttl`` when ``expiry`` is None (unknown remaining life);
-      - otherwise ``max(floor, min(default_ttl, seconds_left - margin))``.
+      - otherwise ``min(default_ttl, seconds_left - margin)``, which may be **<= 0**
+        when the credential is already at/near expiry.
+
+    The result is intentionally **not** floored to a minimum: flooring could yield a
+    URL that outlives the credential. A non-positive return signals the caller to
+    skip minting and fall back to the normal download path.
 
     Args:
         expiry: The credential's expiry as a naive UTC datetime
@@ -73,12 +80,7 @@ def clamp_ttl_to_expiry(
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
     seconds_left = (expiry.replace(tzinfo=timezone.utc) - ref).total_seconds()
-    return int(
-        max(
-            _TTL_FLOOR_SECONDS,
-            min(default_ttl, seconds_left - _TTL_EXPIRY_MARGIN_SECONDS),
-        )
-    )
+    return int(min(default_ttl, seconds_left - _TTL_EXPIRY_MARGIN_SECONDS))
 
 
 def _signing_key() -> str:
@@ -125,7 +127,16 @@ def mint_download_token(
             Gmail, whose attachment id is ephemeral (the route resolves by size).
         mime_type: Resolved MIME type, signed in for the same reason.
         ttl_seconds: Lifetime of the URL.
+
+    Raises:
+        ValueError: if ``ref`` contains a key that collides with a reserved claim,
+            which would otherwise let the locator override ``src``/``sub``/``exp``.
     """
+    collisions = _RESERVED_CLAIMS & ref.keys()
+    if collisions:
+        raise ValueError(
+            f"ref must not contain reserved claim keys: {sorted(collisions)}"
+        )
     now = int(time.time())
     payload = {
         "src": source,

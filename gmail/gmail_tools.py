@@ -1789,18 +1789,22 @@ async def get_gmail_attachment_content(
                 f"[get_gmail_attachment_content] Could not recover credentials: {cred_exc}"
             )
 
-        eff_ttl = clamp_ttl_to_expiry(creds.expiry if creds else None)
+        # Only hand out a signed URL the route can actually serve: the owner's
+        # credentials must be recoverable (so the route can fetch + stream), and the
+        # URL must fit inside the credential's remaining life (eff_ttl > 0). If
+        # neither holds, fall through to the normal download path below rather than
+        # returning a URL that is guaranteed to 401.
+        eff_ttl = clamp_ttl_to_expiry(creds.expiry) if creds else 0
+        if creds and eff_ttl > 0:
+            token = mint_attachment_token(
+                source="gmail",
+                message_id=message_id,
+                attachment_id=attachment_id,
+                user_email=user_google_email,
+                ttl_seconds=eff_ttl,
+            )
+            download_url = get_signed_attachment_url(token)
 
-        token = mint_attachment_token(
-            source="gmail",
-            message_id=message_id,
-            attachment_id=attachment_id,
-            user_email=user_google_email,
-            ttl_seconds=eff_ttl,
-        )
-        download_url = get_signed_attachment_url(token)
-
-        if creds:
             try:
                 from core.attachment_cred_cache import stash_credentials
 
@@ -1809,19 +1813,23 @@ async def get_gmail_attachment_content(
                 logger.debug(
                     f"[get_gmail_attachment_content] Could not pre-cache credentials: {cache_exc}"
                 )
+            logger.info(
+                "[get_gmail_attachment_content] Returning signed streaming URL (no download)"
+            )
+            return "\n".join(
+                [
+                    "Attachment ready — streamed on demand (no base64, nothing stored).",
+                    f"Message ID: {message_id}",
+                    f"\n📎 Download URL: {download_url}",
+                    "\nThe server streams the bytes directly from Gmail when this URL is "
+                    "fetched; the link is signed to you and expires in ~15 minutes.",
+                    "\nNote: Attachment IDs are ephemeral. Always use IDs from the most "
+                    "recent message fetch.",
+                ]
+            )
         logger.info(
-            "[get_gmail_attachment_content] Returning signed streaming URL (no download)"
-        )
-        return "\n".join(
-            [
-                "Attachment ready — streamed on demand (no base64, nothing stored).",
-                f"Message ID: {message_id}",
-                f"\n📎 Download URL: {download_url}",
-                "\nThe server streams the bytes directly from Gmail when this URL is "
-                "fetched; the link is signed to you and expires in ~15 minutes.",
-                "\nNote: Attachment IDs are ephemeral. Always use IDs from the most "
-                "recent message fetch.",
-            ]
+            "[get_gmail_attachment_content] Signed URL unavailable (no recoverable "
+            "credentials or token too near expiry); falling back to download."
         )
 
     # Download attachment content first, then optionally re-fetch message metadata

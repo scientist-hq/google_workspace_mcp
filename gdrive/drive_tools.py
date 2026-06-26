@@ -483,19 +483,22 @@ async def get_drive_file_download_url(
                 f"[get_drive_file_download_url] Could not recover credentials: {cred_exc}"
             )
 
-        eff_ttl = clamp_ttl_to_expiry(creds.expiry if creds else None)
+        # Only hand out a signed URL the route can actually serve: the owner's
+        # credentials must be recoverable, and the URL must fit inside the
+        # credential's remaining life (eff_ttl > 0). Otherwise fall through to the
+        # normal download path rather than returning a URL guaranteed to 401.
+        eff_ttl = clamp_ttl_to_expiry(creds.expiry) if creds else 0
+        if creds and eff_ttl > 0:
+            token = mint_download_token(
+                source="drive",
+                user_email=user_google_email,
+                ref=ref,
+                filename=output_filename,
+                mime_type=output_mime_type,
+                ttl_seconds=eff_ttl,
+            )
+            download_url = get_signed_attachment_url(token)
 
-        token = mint_download_token(
-            source="drive",
-            user_email=user_google_email,
-            ref=ref,
-            filename=output_filename,
-            mime_type=output_mime_type,
-            ttl_seconds=eff_ttl,
-        )
-        download_url = get_signed_attachment_url(token)
-
-        if creds:
             try:
                 from core.attachment_cred_cache import stash_credentials
 
@@ -505,19 +508,23 @@ async def get_drive_file_download_url(
                     f"[get_drive_file_download_url] Could not pre-cache credentials: {cache_exc}"
                 )
 
+            logger.info(
+                "[get_drive_file_download_url] Returning signed streaming URL (no download)"
+            )
+            return "\n".join(
+                [
+                    "File ready — streamed on demand (no base64, nothing stored).",
+                    f"File: {file_name}",
+                    f"File ID: {file_id}",
+                    f"MIME Type: {output_mime_type}",
+                    f"\n📎 Download URL: {download_url}",
+                    "\nThe server streams the bytes directly from Drive when this URL is "
+                    "fetched; the link is signed to you and expires in ~15 minutes.",
+                ]
+            )
         logger.info(
-            "[get_drive_file_download_url] Returning signed streaming URL (no download)"
-        )
-        return "\n".join(
-            [
-                "File ready — streamed on demand (no base64, nothing stored).",
-                f"File: {file_name}",
-                f"File ID: {file_id}",
-                f"MIME Type: {output_mime_type}",
-                f"\n📎 Download URL: {download_url}",
-                "\nThe server streams the bytes directly from Drive when this URL is "
-                "fetched; the link is signed to you and expires in ~15 minutes.",
-            ]
+            "[get_drive_file_download_url] Signed URL unavailable (no recoverable "
+            "credentials or token too near expiry); falling back to download."
         )
 
     # Download the file

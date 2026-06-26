@@ -79,9 +79,18 @@ def _build_store():
         from cryptography.fernet import Fernet
         from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
+        # Mirror server.py's backend selection: an explicit STORAGE_BACKEND=valkey
+        # (host defaulting to localhost) is a valid config and must not silently
+        # fall back to per-process memory, which would break cross-replica recovery.
+        storage_backend = (
+            os.getenv("WORKSPACE_MCP_OAUTH_PROXY_STORAGE_BACKEND", "").strip().lower()
+        )
         valkey_host = os.getenv("WORKSPACE_MCP_OAUTH_PROXY_VALKEY_HOST", "").strip()
+        use_valkey = storage_backend == "valkey" or bool(valkey_host)
 
-        if valkey_host:
+        if use_valkey:
+            if not valkey_host:
+                valkey_host = "localhost"
             from key_value.aio.stores.valkey import ValkeyStore
 
             port = int(

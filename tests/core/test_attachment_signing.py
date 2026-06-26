@@ -153,6 +153,15 @@ class TestDownloadToken:
         assert claims["fn"] == "Report.pdf"
         assert claims["mt"] == "application/pdf"
 
+    def test_ref_with_reserved_key_is_rejected(self):
+        # A locator must not be able to override reserved claims (src/sub/exp/...).
+        with pytest.raises(ValueError):
+            sign.mint_download_token(
+                source="drive",
+                user_email="user@example.com",
+                ref={"fid": "F", "sub": "attacker@example.com"},
+            )
+
 
 class TestFetcherRegistry:
     def test_known_sources_resolve(self):
@@ -187,17 +196,27 @@ class TestClampTtlToExpiry:
         expiry = (self._now() + timedelta(seconds=300)).replace(tzinfo=None)
         assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) == 270
 
-    def test_expired_token_floors_at_30(self):
+    def test_expired_token_returns_non_positive(self):
         from datetime import timedelta
 
+        # Already expired -> non-positive TTL signals the caller to skip minting
+        # (and fall back to the normal download) rather than emit a doomed URL.
         expiry = (self._now() - timedelta(seconds=120)).replace(tzinfo=None)
-        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) == 30
+        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) <= 0
+
+    def test_too_near_expiry_returns_non_positive(self):
+        from datetime import timedelta
+
+        # Less remaining life than the safety margin -> non-positive (never floored
+        # up to a value that would outlive the credential).
+        expiry = (self._now() + timedelta(seconds=20)).replace(tzinfo=None)
+        assert sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now()) <= 0
 
     def test_url_never_outlives_snapshot(self):
-        # Property: clamped TTL + margin <= remaining token life (unless floored).
+        # Property: the URL's TTL never exceeds the credential's remaining life.
         from datetime import timedelta
 
         for secs in (60, 120, 600, 3600):
             expiry = (self._now() + timedelta(seconds=secs)).replace(tzinfo=None)
             ttl = sign.clamp_ttl_to_expiry(expiry, default_ttl=900, now=self._now())
-            assert ttl <= max(30, secs)
+            assert ttl <= secs

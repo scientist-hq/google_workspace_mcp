@@ -33,7 +33,13 @@ from core.config import (
     set_transport_mode as _set_transport_mode,
     get_oauth_redirect_uri as get_oauth_redirect_uri_for_current_mode,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    FileResponse,
+    Response,
+    StreamingResponse,
+)
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
 from mcp.types import ToolAnnotations, Icon
@@ -788,17 +794,23 @@ async def serve_signed_attachment(request: Request):
         )
 
     try:
-        raw, filename, media_type = await fetcher(claims, credentials)
+        result = await fetcher(claims, credentials)
     except SignedDownloadError as e:
         logger.error("Signed download fetch failed: %s", e)
         return JSONResponse(
             {"error": "Failed to fetch the requested resource"}, status_code=502
         )
 
+    headers = {"Content-Disposition": f'attachment; filename="{result.filename}"'}
+    if result.stream is not None:
+        # Bounded-memory streaming (Drive): chunks flow straight to the client.
+        return StreamingResponse(
+            result.stream, media_type=result.media_type, headers=headers
+        )
     return Response(
-        content=raw,
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        content=result.content,
+        media_type=result.media_type,
+        headers=headers,
     )
 
 

@@ -14,7 +14,8 @@ import base64
 import binascii
 import io
 import logging
-from typing import Awaitable, Callable, Optional, Tuple
+from dataclasses import dataclass
+from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -22,15 +23,33 @@ from googleapiclient.http import MediaIoBaseDownload
 
 logger = logging.getLogger(__name__)
 
-# (bytes, filename, mime_type)
-FetchResult = Tuple[bytes, str, str]
+# Bytes pulled from Drive per range request. The googleapiclient default is 100MB,
+# which would buffer 100MB at a time — defeating the point. 8MB bounds per-download
+# memory while keeping the request count sane for large files.
+_DRIVE_CHUNK_SIZE = 8 * 1024 * 1024
+
+
+@dataclass
+class DownloadResult:
+    """What a fetcher returns: a buffered body or a bounded-memory stream.
+
+    A source sets exactly one of ``content`` / ``stream``. Gmail attachments arrive
+    whole in a single API response (and are size-bounded by the email limit), so
+    they're buffered. Drive downloads chunk via MediaIoBaseDownload, so they stream —
+    a multi-GB file never sits in RAM all at once.
+    """
+
+    filename: str
+    media_type: str
+    content: Optional[bytes] = None
+    stream: Optional[AsyncIterator[bytes]] = None
 
 
 class SignedDownloadError(Exception):
     """Raised when a fetcher cannot produce the bytes (maps to a 502 in the route)."""
 
 
-async def _fetch_gmail(claims: dict, credentials: Credentials) -> FetchResult:
+async def _fetch_gmail(claims: dict, credentials: Credentials) -> DownloadResult:
     """Fetch a Gmail attachment by message + attachment id.
 
     Gmail attachment ids are ephemeral and rotate between fetches, so the filename
@@ -105,14 +124,19 @@ async def _fetch_gmail(claims: dict, credentials: Credentials) -> FetchResult:
         except Exception:
             logger.debug("Could not resolve Gmail filename; using defaults")
 
-    return raw, filename, media_type
+    # Gmail's whole attachment is already in memory (single API response), so buffer.
+    return DownloadResult(filename=filename, media_type=media_type, content=raw)
 
 
-async def _fetch_drive(claims: dict, credentials: Credentials) -> FetchResult:
+async def _fetch_drive(claims: dict, credentials: Credentials) -> DownloadResult:
     """Fetch a Drive file by id, exporting native Google files when ``emt`` is set.
 
-    Drive file ids are stable, so filename/MIME are resolved at mint time and
-    signed into the token (``fn``/``mt``); this fetcher just streams the bytes.
+    Drive file ids are stable, so filename/MIME are resolved at mint time and signed
+    into the token (``fn``/``mt``). The bytes are streamed in bounded chunks so a
+    large file never sits in RAM all at once.
+
+    The first chunk is pulled eagerly so auth / not-found failures surface as a 502
+    before the streaming response starts; later chunks stream as they download.
     """
     file_id = claims.get("fid")
     if not file_id:
@@ -126,26 +150,51 @@ async def _fetch_drive(claims: dict, credentials: Credentials) -> FetchResult:
         else drive.files().get_media(fileId=file_id)
     )
 
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request_obj)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request_obj, chunksize=_DRIVE_CHUNK_SIZE)
+
+    def _next_chunk() -> tuple[bytes, bool]:
+        # next_chunk() appends one chunk to fh (no seek); read it out, then reset fh
+        # so memory stays bounded to one chunk. Safe: MediaIoBaseDownload tracks its
+        # position via Range headers, not the file handle's position.
+        _status, done = downloader.next_chunk()
+        chunk = fh.getvalue()
+        fh.seek(0)
+        fh.truncate(0)
+        return chunk, done
+
     try:
-        done = False
-        while not done:
-            _status, done = await asyncio.to_thread(downloader.next_chunk)
+        first_chunk, done = await asyncio.to_thread(_next_chunk)
     except Exception as exc:
         raise SignedDownloadError(f"Drive download failed: {exc}") from exc
 
+    async def body() -> AsyncIterator[bytes]:
+        chunk, finished = first_chunk, done
+        if chunk:
+            yield chunk
+        while not finished:
+            try:
+                chunk, finished = await asyncio.to_thread(_next_chunk)
+            except Exception as exc:
+                # Headers are already sent; we can only truncate the stream.
+                logger.error("Drive stream interrupted mid-download: %s", exc)
+                return
+            if chunk:
+                yield chunk
+
     filename = claims.get("fn") or "download"
     media_type = claims.get("mt") or export_mime or "application/octet-stream"
-    return buffer.getvalue(), filename, media_type
+    return DownloadResult(filename=filename, media_type=media_type, stream=body())
 
 
-_FETCHERS: dict[str, Callable[[dict, Credentials], Awaitable[FetchResult]]] = {
+_FETCHERS: dict[str, Callable[[dict, Credentials], Awaitable[DownloadResult]]] = {
     "gmail": _fetch_gmail,
     "drive": _fetch_drive,
 }
 
 
-def get_fetcher(source: str) -> Optional[Callable[[dict, Credentials], Awaitable[FetchResult]]]:
+def get_fetcher(
+    source: str,
+) -> Optional[Callable[[dict, Credentials], Awaitable[DownloadResult]]]:
     """Return the fetcher for a token source, or None if unsupported."""
     return _FETCHERS.get(source)

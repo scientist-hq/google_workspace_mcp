@@ -58,6 +58,48 @@ def _signing_key() -> str:
     return key
 
 
+def mint_download_token(
+    *,
+    source: str,
+    user_email: str,
+    ref: dict,
+    filename: Optional[str] = None,
+    mime_type: Optional[str] = None,
+    ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+) -> str:
+    """Sign a capability token for a single downloadable resource and owner.
+
+    Source-agnostic: ``ref`` carries the source-specific locator (Gmail:
+    ``{"mid", "aid"}``; Drive: ``{"fid", "emt"?}``) and is merged into the token
+    claims. The matching fetcher in ``core.signed_download`` knows how to turn
+    those claims back into bytes.
+
+    Args:
+        source: Origin of the resource (``"gmail"`` | ``"drive"``).
+        user_email: Owner whose credentials the route must use to fetch the bytes.
+        ref: Source-specific locator claims (must not collide with reserved keys
+            ``src``/``sub``/``iat``/``exp``/``fn``/``mt``).
+        filename: Resolved filename, signed in so the route can name the download
+            without re-resolving. Use for stable-id sources (e.g. Drive); omit for
+            Gmail, whose attachment id is ephemeral (the route resolves by size).
+        mime_type: Resolved MIME type, signed in for the same reason.
+        ttl_seconds: Lifetime of the URL.
+    """
+    now = int(time.time())
+    payload = {
+        "src": source,
+        "sub": user_email,
+        "iat": now,
+        "exp": now + ttl_seconds,
+        **ref,
+    }
+    if filename:
+        payload["fn"] = filename
+    if mime_type:
+        payload["mt"] = mime_type
+    return jwt.encode(payload, _signing_key(), algorithm=_ALG)
+
+
 def mint_attachment_token(
     *,
     source: str,
@@ -68,32 +110,15 @@ def mint_attachment_token(
     mime_type: Optional[str] = None,
     ttl_seconds: int = _DEFAULT_TTL_SECONDS,
 ) -> str:
-    """Sign a capability token referencing a single attachment for a single owner.
-
-    Args:
-        source: Origin of the attachment (currently ``"gmail"``).
-        message_id: Gmail message id the attachment belongs to.
-        attachment_id: Ephemeral Gmail attachment id.
-        user_email: Owner whose credentials the route must use to fetch the bytes.
-        filename: Resolved attachment filename, signed in so the route can name the
-            download without re-resolving the (ephemeral) attachment id.
-        mime_type: Resolved MIME type, signed in for the same reason.
-        ttl_seconds: Lifetime of the URL.
-    """
-    now = int(time.time())
-    payload = {
-        "src": source,
-        "mid": message_id,
-        "aid": attachment_id,
-        "sub": user_email,
-        "iat": now,
-        "exp": now + ttl_seconds,
-    }
-    if filename:
-        payload["fn"] = filename
-    if mime_type:
-        payload["mt"] = mime_type
-    return jwt.encode(payload, _signing_key(), algorithm=_ALG)
+    """Gmail convenience wrapper over :func:`mint_download_token`."""
+    return mint_download_token(
+        source=source,
+        user_email=user_email,
+        ref={"mid": message_id, "aid": attachment_id},
+        filename=filename,
+        mime_type=mime_type,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 def verify_attachment_token(token: str) -> Optional[dict]:

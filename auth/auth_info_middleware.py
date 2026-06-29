@@ -43,6 +43,53 @@ class AuthInfoMiddleware(Middleware):
         authenticated_user = None
         auth_via = None
 
+        # Trusted-gateway identity: verify the SIGNED assertion the fronting proxy injects
+        # and use the asserted email as the principal. This is the highest-priority and only
+        # trusted source in this mode (MCP_ENABLE_OAUTH21 is off — the proxy owns the handshake).
+        from auth.oauth_config import is_trust_gateway_identity, get_oauth_config
+
+        if is_trust_gateway_identity():
+            try:
+                header_name = get_oauth_config().gateway_identity_header
+                hdrs = get_http_headers(include={header_name}) or {}
+                assertion = hdrs.get(header_name)
+                if assertion:
+                    from auth.gateway_identity import extract_email_from_assertion
+
+                    verified_email = extract_email_from_assertion(assertion)
+                    if verified_email:
+                        await context.fastmcp_context.set_state(
+                            "authenticated_user_email", verified_email
+                        )
+                        await context.fastmcp_context.set_state(
+                            "authenticated_via", "gateway_assertion"
+                        )
+                        await context.fastmcp_context.set_state(
+                            "user_email", verified_email
+                        )
+                        await context.fastmcp_context.set_state(
+                            "username", verified_email
+                        )
+                        authenticated_user = verified_email
+                        auth_via = "gateway_assertion"
+                        logger.info(
+                            f"✓ Verified gateway identity assertion for: {verified_email}"
+                        )
+                    else:
+                        logger.warning(
+                            "[AuthInfoMiddleware] Gateway identity assertion present but FAILED "
+                            "verification — treating request as unauthenticated"
+                        )
+                else:
+                    logger.debug(
+                        "[AuthInfoMiddleware] trust-gateway-identity mode but no assertion "
+                        f"header '{header_name}' present"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"[AuthInfoMiddleware] Error processing gateway identity assertion: {e}"
+                )
+
         # First check if FastMCP has already validated an access token
         try:
             access_token = get_access_token()

@@ -25,6 +25,7 @@ from auth.oauth_config import (
     get_oauth_config,
     is_external_oauth21_provider,
     is_service_account_enabled,
+    is_trust_gateway_identity,
 )
 from core.context import set_fastmcp_session_id
 from auth.scopes import (
@@ -177,19 +178,27 @@ def _override_oauth21_user_email(
     service_type: str = "",
 ) -> Tuple[str, tuple]:
     """
-    Override user_google_email with authenticated user when using OAuth 2.1.
+    Override user_google_email with the authenticated user.
+
+    Engaged when the request carries a trusted principal: either OAuth 2.1 (verified
+    access token) OR trusted-gateway identity (a verified proxy assertion). In both
+    cases the asserted/authenticated user is authoritative, so a caller cannot act on
+    another account by passing a different user_google_email.
 
     Returns:
         Tuple of (updated_user_email, updated_args)
     """
+    enforce_identity = use_oauth21 or is_trust_gateway_identity()
     if not (
-        use_oauth21 and authenticated_user and current_user_email != authenticated_user
+        enforce_identity
+        and authenticated_user
+        and current_user_email != authenticated_user
     ):
         return current_user_email, args
 
     service_suffix = f" for service '{service_type}'" if service_type else ""
     logger.info(
-        f"[{tool_name}] OAuth 2.1: Overriding user_google_email from '{current_user_email}' to authenticated user '{authenticated_user}'{service_suffix}"
+        f"[{tool_name}] Overriding user_google_email from '{current_user_email}' to authenticated user '{authenticated_user}'{service_suffix}"
     )
 
     # Update in kwargs if present

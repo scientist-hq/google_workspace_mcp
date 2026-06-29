@@ -64,6 +64,48 @@ class OAuthConfig:
                 "EXTERNAL_OAUTH21_PROVIDER requires MCP_ENABLE_OAUTH21=true"
             )
 
+        # Trusted-gateway identity (provider-agnostic).
+        # An MCP-aware reverse proxy (e.g. Pomerium, oauth2-proxy, Cloudflare Access,
+        # Istio/Envoy, Traefik ForwardAuth) authenticates the user and injects a SIGNED
+        # identity assertion (a JWT) on every upstream request. This server verifies that
+        # assertion against the proxy's JWKS and uses the asserted email as the per-request
+        # principal — WITHOUT terminating MCP OAuth itself (MCP_ENABLE_OAUTH21 stays off), so
+        # it composes with the proxy instead of fighting it for the single MCP auth handshake.
+        # Credentials are still the legacy per-user Google grants (keyed by email); the asserted
+        # identity just selects/locks which user's grant a request may use (true per-user isolation).
+        # Defaults target Pomerium; override the header/algorithm for other providers.
+        self.trust_gateway_identity = (
+            os.getenv("TRUST_GATEWAY_IDENTITY", "false").lower() == "true"
+        )
+        self.gateway_identity_jwks_url = os.getenv("GATEWAY_IDENTITY_JWKS_URL")
+        # Header carrying the signed assertion (default: Pomerium's x-pomerium-jwt-assertion;
+        # e.g. cf-access-jwt-assertion for Cloudflare Access).
+        self.gateway_identity_header = os.getenv(
+            "GATEWAY_IDENTITY_HEADER", "x-pomerium-jwt-assertion"
+        ).lower()
+        # Allowed signing algorithm(s), comma-separated (default ES256 — Pomerium; use
+        # RS256 for Cloudflare Access, etc.). Pinned to block alg-confusion/none attacks.
+        self.gateway_identity_algorithms = [
+            a.strip()
+            for a in os.getenv("GATEWAY_IDENTITY_ALGORITHMS", "ES256").split(",")
+            if a.strip()
+        ]
+        # Optional issuer/audience pinning for the assertion (recommended in production).
+        self.gateway_identity_issuer = os.getenv("GATEWAY_IDENTITY_ISSUER")
+        self.gateway_identity_audience = os.getenv("GATEWAY_IDENTITY_AUDIENCE")
+        if self.trust_gateway_identity:
+            if self.oauth21_enabled:
+                raise ValueError(
+                    "TRUST_GATEWAY_IDENTITY is incompatible with MCP_ENABLE_OAUTH21=true. "
+                    "In trusted-gateway mode the proxy owns the MCP handshake; keep "
+                    "MCP_ENABLE_OAUTH21=false."
+                )
+            if not self.gateway_identity_jwks_url:
+                raise ValueError(
+                    "TRUST_GATEWAY_IDENTITY=true requires GATEWAY_IDENTITY_JWKS_URL "
+                    "(the gateway's JWKS endpoint used to verify the identity assertion)."
+                )
+
         # Stateless mode configuration
         self.stateless_mode = (
             os.getenv("WORKSPACE_MCP_STATELESS_MODE", "false").lower() == "true"
@@ -498,6 +540,11 @@ def is_stateless_mode() -> bool:
 def is_external_oauth21_provider() -> bool:
     """Check if external OAuth 2.1 provider mode is enabled."""
     return get_oauth_config().is_external_oauth21_provider()
+
+
+def is_trust_gateway_identity() -> bool:
+    """Check if trusted-gateway identity (signed assertion) mode is enabled."""
+    return get_oauth_config().trust_gateway_identity
 
 
 def is_service_account_enabled() -> bool:

@@ -575,12 +575,32 @@ async def start_auth_flow(
             oauth_state,
             session_id=session_id,
             code_verifier=flow.code_verifier,
+            # Record the principal this flow is for, so the callback can verify the Google
+            # account actually consented matches it (trusted-gateway identity enforcement).
+            user_email=user_google_email,
         )
 
         logger.info(
             f"Auth flow started for {user_display_name}. State: {oauth_state[:8]}... "
             f"Browser opened automatically: {browser_opened}"
         )
+
+        # Trusted-gateway identity: the principal is verified and fixed, so give a clear,
+        # identity-specific instruction — no "tell me your email" step, no generic
+        # "must match" footnote that confuses the client.
+        from auth.oauth_config import is_trust_gateway_identity
+
+        if is_trust_gateway_identity():
+            return "\n".join(
+                [
+                    f"**ACTION REQUIRED: Google sign-in needed for {user_display_name}**\n",
+                    f"You're authenticated at the gateway as **{user_google_email}**. To authorize Google access:",
+                    f"1. Open this URL and sign in to Google as **{user_google_email}** — it must be that exact account (your verified gateway identity):",
+                    f"   Authorization URL: {auth_url}",
+                    "2. After authorizing, retry your original request.",
+                    f"\nOnly the Google account matching your gateway identity (**{user_google_email}**) can be authorized — signing in with a different account is rejected.",
+                ]
+            )
 
         if browser_opened:
             message_lines = [
@@ -786,6 +806,31 @@ async def handle_auth_callback(
 
         user_google_email = user_info["email"]
         logger.info(f"Identified user_google_email: {user_google_email}")
+
+        # Trusted-gateway identity: the flow was initiated for a verified principal
+        # (recorded in the state). The Google account actually consented MUST match it —
+        # otherwise we'd bind the wrong account to this principal's session. Reject the
+        # mismatch and store nothing. (Cannot occur in normal prod, where the gateway
+        # identity IS the Google identity; this is defense-in-depth.)
+        from auth.oauth_config import is_trust_gateway_identity
+
+        expected_email = state_info.get("user_email")
+        if (
+            is_trust_gateway_identity()
+            and expected_email
+            and user_google_email.strip().lower() != expected_email.strip().lower()
+        ):
+            logger.error(
+                "SECURITY: OAuth consent account '%s' does not match the gateway identity "
+                "'%s'; rejecting (no credentials stored).",
+                user_google_email,
+                expected_email,
+            )
+            raise GoogleAuthenticationError(
+                f"Google account mismatch: you signed in as {user_google_email}, but your "
+                f"verified gateway identity is {expected_email}. Please sign in to Google as "
+                f"{expected_email}."
+            )
 
         stateless_mode = is_stateless_mode()
         credential_store = None

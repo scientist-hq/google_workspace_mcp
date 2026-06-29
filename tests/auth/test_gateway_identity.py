@@ -114,3 +114,15 @@ def test_missing_jwks_url_rejected(monkeypatch, ec_keypair):
     priv, pub = ec_keypair
     _patch(monkeypatch, pub, _Cfg(jwks_url=None))
     assert gi.verify_gateway_assertion(_make(priv)) is None
+
+
+def test_blank_email_rejected(monkeypatch, ec_keypair):
+    priv, pub = ec_keypair
+    _patch(monkeypatch, pub, _Cfg())
+    assert gi.extract_email_from_assertion(_make(priv, email="   ")) is None
+
+
+def test_non_string_email_rejected(monkeypatch, ec_keypair):
+    priv, pub = ec_keypair
+    _patch(monkeypatch, pub, _Cfg())
+    assert gi.extract_email_from_assertion(_make(priv, email=["a@b.com"])) is None

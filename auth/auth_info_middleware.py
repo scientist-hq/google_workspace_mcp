@@ -2,6 +2,7 @@
 Authentication middleware to populate context state with user information
 """
 
+import asyncio
 import logging
 import time
 
@@ -56,7 +57,11 @@ class AuthInfoMiddleware(Middleware):
                 if assertion:
                     from auth.gateway_identity import extract_email_from_assertion
 
-                    verified_email = extract_email_from_assertion(assertion)
+                    # Offload the (synchronous) JWKS fetch/verify off the event loop —
+                    # PyJWKClient can do network I/O on cold start / key rotation.
+                    verified_email = await asyncio.to_thread(
+                        extract_email_from_assertion, assertion
+                    )
                     if verified_email:
                         await context.fastmcp_context.set_state(
                             "authenticated_user_email", verified_email
@@ -89,6 +94,11 @@ class AuthInfoMiddleware(Middleware):
                 logger.error(
                     f"[AuthInfoMiddleware] Error processing gateway identity assertion: {e}"
                 )
+            # In trusted-gateway mode the verified assertion is the SOLE principal source —
+            # don't fall through to token/session paths that could overwrite it.
+            if authenticated_user:
+                logger.info(f"✓ Authenticated via {auth_via}: {authenticated_user}")
+                return
 
         # First check if FastMCP has already validated an access token
         try:

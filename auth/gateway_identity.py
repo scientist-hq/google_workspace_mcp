@@ -108,9 +108,9 @@ def extract_email_from_assertion(token: str) -> Optional[str]:
     if not claims:
         return None
     email = claims.get("email")
-    if not email:
+    if not isinstance(email, str) or not email.strip():
         logger.warning(
-            "SECURITY: verified gateway assertion has no 'email' claim (sub=%s)",
+            "SECURITY: verified gateway assertion has no usable 'email' claim (sub=%s)",
             claims.get("sub"),
         )
         return None

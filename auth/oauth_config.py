@@ -105,6 +105,11 @@ class OAuthConfig:
                     "TRUST_GATEWAY_IDENTITY=true requires GATEWAY_IDENTITY_JWKS_URL "
                     "(the gateway's JWKS endpoint used to verify the identity assertion)."
                 )
+            if not self.gateway_identity_algorithms:
+                raise ValueError(
+                    "TRUST_GATEWAY_IDENTITY=true requires GATEWAY_IDENTITY_ALGORITHMS "
+                    "to list at least one signing algorithm (e.g. ES256)."
+                )
 
         # Stateless mode configuration
         self.stateless_mode = (

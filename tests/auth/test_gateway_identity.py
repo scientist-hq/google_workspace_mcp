@@ -97,7 +97,9 @@ def test_audience_match_accepted(monkeypatch, ec_keypair):
 def test_verified_but_emailless_extracts_none(monkeypatch, ec_keypair):
     priv, pub = ec_keypair
     _patch(monkeypatch, pub, _Cfg())
-    token = jwt.encode({"sub": "x", "exp": int(time.time()) + 300}, priv, algorithm="ES256")
+    token = jwt.encode(
+        {"sub": "x", "exp": int(time.time()) + 300}, priv, algorithm="ES256"
+    )
     assert gi.verify_gateway_assertion(token) is not None  # signature/exp valid
     assert gi.extract_email_from_assertion(token) is None  # but no email claim
 

@@ -264,6 +264,7 @@ class OAuth21SessionStore:
         return {
             "session_id": state_info.get("session_id"),
             "code_verifier": state_info.get("code_verifier"),
+            "user_email": state_info.get("user_email"),
             "created_at": (
                 state_info["created_at"].astimezone(timezone.utc).isoformat()
                 if state_info.get("created_at")
@@ -454,8 +455,13 @@ class OAuth21SessionStore:
         session_id: Optional[str] = None,
         expires_in_seconds: int = 600,
         code_verifier: Optional[str] = None,
+        user_email: Optional[str] = None,
     ) -> None:
-        """Persist an OAuth state value for later validation."""
+        """Persist an OAuth state value for later validation.
+
+        user_email records the principal the flow was initiated for (when known), so the
+        callback can verify the Google account actually consented matches it.
+        """
         if not state:
             raise ValueError("OAuth state must be provided")
         if expires_in_seconds < 0:
@@ -470,6 +476,7 @@ class OAuth21SessionStore:
                 "expires_at": expiry,
                 "created_at": now,
                 "code_verifier": code_verifier,
+                "user_email": user_email,
             }
             self._oauth_states[state] = state_info
             self._persist_oauth_state_to_shared_store(state, state_info)
